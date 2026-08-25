@@ -26,12 +26,14 @@ FPS="15"
 JOBS="1"
 TRIM_BARS="auto"
 EXT_OVERRIDE=""
+AUDIO="profile"
+QUALITY=""
 FORCE=0
 DRY_RUN=0
 TEST_CLIPS=0
 CLIP_SECONDS=20
 
-VALID_PROFILES="amv mjpeg xvid mpeg4"
+VALID_PROFILES="amv mjpeg xvid mpeg4 h264"
 
 usage() {
   cat <<'USAGE'
@@ -52,6 +54,9 @@ Options:
                         mjpeg   MJPEG video + PCM audio, .avi  (big files)
                         xvid    Xvid video + MP3 audio, .avi   (needs a real Xvid decoder)
                         mpeg4   MPEG-4 SP video + MP3 audio, .avi
+                        h264    H.264 baseline + AAC, .mp4. For players built
+                                on Spreadtrum chipsets, which take MP4 rather
+                                than AVI.
 
                       AMV constraints, enforced below: output height must be a
                       multiple of 16, audio is always 22050 Hz mono, and --fps
@@ -74,6 +79,16 @@ Options:
                       by extension: this Anko unit lists .avi and does not show
                       .amv at all, so "--profile amv --ext avi" writes AMV data
                       into a file the browser will display.
+  --audio MODE        Override the profile's audio. Cheap decoders are fussy
+                      here, and mono is a common reason a file is rejected.
+                        profile     whatever the profile specifies (default)
+                        pcm-stereo  PCM 16-bit, 22050 Hz, stereo
+                        pcm-mono    PCM 16-bit, 22050 Hz, mono
+                        mp3-stereo  MP3 64k, 44100 Hz, stereo
+                        mp3-mono    MP3 64k, 22050 Hz, mono
+                        aac         AAC 160k
+                        none        no audio track at all
+  --quality N         Encoder -q:v value, 1 is best. Profile default otherwise.
   --fps N             Output frame rate. Default: 15
   --jobs N            Convert N files concurrently. Default: 1
   --clip-seconds N    Length of each test clip. Default: 20
@@ -111,6 +126,8 @@ while [[ $# -gt 0 ]]; do
     --fps)            FPS="${2:-}"; shift 2 ;;
     --trim-bars)      TRIM_BARS="${2:-}"; shift 2 ;;
     --ext)            EXT_OVERRIDE="${2:-}"; shift 2 ;;
+    --audio)          AUDIO="${2:-}"; shift 2 ;;
+    --quality)        QUALITY="${2:-}"; shift 2 ;;
     --jobs)           JOBS="${2:-}"; shift 2 ;;
     --clip-seconds)   CLIP_SECONDS="${2:-}"; shift 2 ;;
     --force)          FORCE=1; shift ;;
@@ -166,6 +183,22 @@ if [[ -n "$EXT_OVERRIDE" ]]; then
   EXT_OVERRIDE="${EXT_OVERRIDE#.}"
   [[ "$EXT_OVERRIDE" =~ ^[A-Za-z0-9]{1,8}$ ]] \
     || die "Bad --ext '$EXT_OVERRIDE'. Expected a short alphanumeric extension, e.g. avi"
+fi
+
+case "$AUDIO" in
+  profile|pcm-stereo|pcm-mono|mp3-stereo|mp3-mono|aac|none) ;;
+  *) die "Bad --audio '$AUDIO'. Valid: profile pcm-stereo pcm-mono mp3-stereo mp3-mono aac none" ;;
+esac
+
+if [[ -n "$QUALITY" ]]; then
+  [[ "$QUALITY" =~ ^[0-9]+$ && "$QUALITY" -ge 1 && "$QUALITY" -le 31 ]] \
+    || die "Bad --quality '$QUALITY'. Expected 1-31, where 1 is best."
+fi
+
+# AMV's audio is part of the container contract, not a free choice.
+if [[ "$PROFILE" == "amv" && "$AUDIO" != "profile" ]]; then
+  die "--profile amv fixes its own audio (IMA ADPCM, 22050 Hz mono) because the
+       muxer ties the audio frame size to the frame rate. Drop --audio."
 fi
 
 case "$TRIM_BARS" in
@@ -281,40 +314,55 @@ set_profile() {
 set_profile_args() {
   case "$1" in
     amv)
-      # What this class of player was actually built to play. Three hard
-      # constraints, all enforced by validate_amv():
-      #   - audio is 22050 Hz mono, the only rate the encoder opens at
-      #   - the muxer demands exactly sample_rate/fps samples per audio frame,
-      #     which is what -block_size sets. Get it wrong and the header will
-      #     not write at all.
-      #   - the encoder wants a height that is a multiple of 16
-      PROFILE_ARGS=( -c:v amv -pix_fmt yuvj420p -q:v 6
-                     -c:a adpcm_ima_amv -ar 22050 -ac 1
-                     -block_size $((22050 / FPS)) )
-      PROFILE_FORMAT="amv"
-      PROFILE_EXT="amv"
+      # What Actions-chipset players take. Three hard constraints, enforced by
+      # validate_amv(): audio is 22050 Hz mono, the muxer demands exactly
+      # sample_rate/fps samples per audio frame (that is -block_size, and the
+      # header will not write without it), and height must be a multiple of 16.
+      PROFILE_VARGS=( -c:v amv -pix_fmt yuvj420p -q:v "${QUALITY:-6}" )
+      PROFILE_AARGS=( -c:a adpcm_ima_amv -ar 22050 -ac 1 -block_size $((22050 / FPS)) )
+      PROFILE_FORMAT="amv"; PROFILE_EXT="amv"
       ;;
     mjpeg)
-      # MJPEG plus uncompressed PCM. Every frame is a standalone JPEG, which is
-      # what the cheapest decoder chips cope with. Mono 22kHz keeps the
-      # uncompressed audio from dwarfing the video.
-      PROFILE_ARGS=( -c:v mjpeg -q:v 6 -pix_fmt yuvj420p
-                     -c:a pcm_s16le -ar 22050 -ac 1 )
+      # Every frame is a standalone JPEG, which is what the cheapest decoder
+      # chips manage. Stereo PCM at 22050 matches the settings known to work on
+      # Shenju-based 128x160 players; mono is a common cause of rejection.
+      PROFILE_VARGS=( -c:v mjpeg -pix_fmt yuvj420p -q:v "${QUALITY:-2}" )
+      PROFILE_AARGS=( -c:a pcm_s16le -ar 22050 -ac 2 )
       PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
     xvid)
-      PROFILE_ARGS=( -c:v libxvid -q:v 6 -pix_fmt yuv420p -vtag XVID
-                     -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
+      PROFILE_VARGS=( -c:v libxvid -pix_fmt yuv420p -vtag XVID -q:v "${QUALITY:-6}" )
+      PROFILE_AARGS=( -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
       PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
     mpeg4)
       # ffmpeg's built-in MPEG-4 encoder, tagged DIVX because some players
       # dispatch on the FourCC rather than sniffing the stream.
-      PROFILE_ARGS=( -c:v mpeg4 -q:v 6 -pix_fmt yuv420p -vtag DIVX
-                     -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
+      PROFILE_VARGS=( -c:v mpeg4 -pix_fmt yuv420p -vtag DIVX -q:v "${QUALITY:-6}" )
+      PROFILE_AARGS=( -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
       PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
+    h264)
+      # Spreadtrum-based 128x160 players take MP4 rather than AVI. Baseline
+      # level 1 is the ceiling these decoders handle.
+      PROFILE_VARGS=( -c:v libx264 -profile:v baseline -level 1 -pix_fmt yuv420p )
+      PROFILE_AARGS=( -c:a aac -b:a 160k )
+      PROFILE_FORMAT="mp4"; PROFILE_EXT="mp4"
+      ;;
   esac
+
+  # --audio overrides whatever the profile chose.
+  case "$AUDIO" in
+    profile)    ;;
+    pcm-stereo) PROFILE_AARGS=( -c:a pcm_s16le -ar 22050 -ac 2 ) ;;
+    pcm-mono)   PROFILE_AARGS=( -c:a pcm_s16le -ar 22050 -ac 1 ) ;;
+    mp3-stereo) PROFILE_AARGS=( -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 ) ;;
+    mp3-mono)   PROFILE_AARGS=( -c:a libmp3lame -b:a 64k -ar 22050 -ac 1 ) ;;
+    aac)        PROFILE_AARGS=( -c:a aac -b:a 160k ) ;;
+    none)       PROFILE_AARGS=( -an ) ;;
+  esac
+
+  PROFILE_ARGS=( "${PROFILE_VARGS[@]}" "${PROFILE_AARGS[@]}" )
 }
 
 # convert_one <src> <dst> <w> <h> <fit> <rot> <logfile> [extra ffmpeg input args...]
@@ -486,8 +534,11 @@ run_batch() {
   note "Log:      ${log#$ROOT/}"
   note ""
 
-  local status_dir; status_dir="$(mktemp -d)"
-  trap 'rm -rf "$status_dir"' EXIT
+  # Global, not local: the EXIT trap fires after run_batch has returned, and a
+  # local would be out of scope by then ("status_dir: unbound variable").
+  STATUS_DIR="$(mktemp -d)"
+  trap 'rm -rf "${STATUS_DIR:-}"' EXIT
+  local status_dir="$STATUS_DIR"
 
   local total=${#files[@]} idx=0
   for f in "${files[@]}"; do

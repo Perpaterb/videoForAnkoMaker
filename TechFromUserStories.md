@@ -168,6 +168,42 @@ readable truncated on a 128x160 screen.
 
 Files: `scripts/probe-pack.sh`, `convert.sh`
 
+## US-009 — Match settings known to work on other 128x160 players
+
+The Anko manual gives "AVI (128 x 160 resolution; conversion required)", which
+confirms the container and geometry were correct in round one and moves the
+problem inside the file.
+
+`set_profile_args()` was split: it now sets `PROFILE_VARGS` and `PROFILE_AARGS`
+separately and concatenates them into `PROFILE_ARGS`, so `--audio` can replace
+the audio half without the profiles each having to know about the flag.
+
+Settings published as working on other 128x160 units differ from the original
+attempt in three ways, all now the `mjpeg` profile's defaults: **stereo** PCM
+rather than mono, 16 fps, and `-q:v 2`. Mono is the strongest suspect, since
+these decoders commonly assume two channels.
+
+Verified by encoding the same source through `convert.sh` and through the
+reference command directly, then comparing with `ffprobe`: codec, dimensions,
+pixel format, frame rate, audio codec, sample rate and channel count all match.
+
+`--audio none` also drops `-map 0:a:0?`, because mapping a stream and then
+passing `-an` is contradictory.
+
+A guard rejects `--audio` on `--profile amv`: that muxer ties the audio frame
+size to the frame rate via `-block_size`, so the audio is part of the container
+contract rather than a free choice.
+
+Files: `convert.sh`, `scripts/probe-pack.sh`
+
+### Bug fixed: stderr noise on every successful batch
+
+`run_batch()` declared `status_dir` with `local` and then registered
+`trap 'rm -rf "$status_dir"' EXIT`. The trap fires after the function has
+returned, so the variable was out of scope and every successful run ended with
+`status_dir: unbound variable` on stderr under `set -u`. Now stored in a global
+`STATUS_DIR`. A test asserts a clean run writes nothing to stderr at all.
+
 ## Testing
 
 `scripts/smoke.sh` builds a synthetic 640x360 source with `lavfi` (`testsrc` plus

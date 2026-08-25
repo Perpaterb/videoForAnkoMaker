@@ -115,7 +115,32 @@ separable.
       one thing at a time: container, extension and resolution
 - [x] Clip names are short and digit-prefixed so they stay readable and ordered
       on a 128x160 screen
-- [ ] **A clip from the pack plays on the device**
+- [x] **Tested on the device**: 8 of 9 listed, and #5 (the `.amv`) was the one
+      missing, exactly as the control predicted. The extension filter is real.
+      All 8 listed clips still reported "Video Format Not Supported", ruling out
+      both AMV-in-`.avi` and the resolution theory. See US-009.
+
+## US-009 — Match settings known to work on other 128x160 players
+
+The Anko manual specifies "AVI (128 x 160 resolution; conversion required)", so
+the container and geometry were right from the start and the problem is inside
+the file. Published settings for other 128x160 players differ from the first
+attempt in three ways: stereo rather than mono audio, 16 fps, and `-q:v 2`.
+
+- [x] `--audio MODE` overrides the profile's audio: `pcm-stereo`, `pcm-mono`,
+      `mp3-stereo`, `mp3-mono`, `aac`, `none`
+- [x] `--quality N` sets the encoder `-q:v`
+- [x] New `h264` profile writes H.264 baseline level 1 + AAC into `.mp4`, for
+      Spreadtrum-based players
+- [x] The `mjpeg` profile now defaults to stereo PCM at `-q:v 2`, matching the
+      settings published as working elsewhere
+- [x] `--profile amv` refuses an `--audio` override rather than silently ignoring
+      it, since the AMV muxer ties audio frame size to frame rate
+- [x] Verified: output stream properties match the reference command exactly
+      (codec, size, pixel format, frame rate, audio codec, rate, channels)
+- [x] `probe-pack.sh --pack recipes` builds a 9-clip set isolating one variable
+      each: stereo vs mono, audio vs none, PCM vs MP3, AVI vs MP4, frame rate
+- [ ] **A clip from the recipes pack plays on the device**
 
 ---
 
@@ -126,4 +151,4 @@ separable.
 - [x] `./scripts/smoke.sh --verify-fails` proves the assertions go red against wrong output
 - [x] `./scripts/smoke.sh --target <dir>` validates AVIs already in a folder, including
       an SD card mount, and checks they all agree on geometry and codec
-- [x] 106 assertions passing, 0 failing, as of the last run
+- [x] 123 assertions passing, 0 failing, as of the last run

@@ -360,7 +360,7 @@ else
 fi
 
 printf '\n=== US-005: bad arguments are rejected ===\n'
-for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x" "--ext ..." "--ext toolongextension"; do
+for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x" "--ext ..." "--ext toolongextension" "--audio surround" "--quality 99"; do
   # shellcheck disable=SC2086
   if "$CONVERT" -i "$WORK/in" -o "$WORK/out" $bad >/dev/null 2>&1; then
     fail "'$bad' was accepted"
@@ -421,6 +421,61 @@ fi
 after="$(stat -c%s "$WORK/same/clip.avi" 2>/dev/null || echo 0)"
 assert_gt0 "output still intact after an in-place re-run" "$after"
 assert_eq  "output unchanged by the in-place re-run" "$before" "$after"
+
+printf '\n=== US-009: --audio, --quality and the h264 profile ===\n'
+rm -f "$WORK/out"/*.avi "$WORK/out"/*.amv "$WORK/out"/*.mp4
+# Stereo vs mono is the exact variable under suspicion on the device, so it has
+# to be provably settable rather than just accepted as a flag.
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio pcm-stereo --quality 2
+stereo="$WORK/out/it's a test clip.avi"
+assert_eq "audio channels with --audio pcm-stereo" "2" "$(probe a:0 stream=channels "$stereo")"
+assert_eq "audio codec with --audio pcm-stereo" "pcm_s16le" "$(probe a:0 stream=codec_name "$stereo")"
+assert_eq "sample rate with --audio pcm-stereo" "22050" "$(probe a:0 stream=sample_rate "$stereo")"
+assert_eq "frame rate honoured" "16/1" "$(probe v:0 stream=r_frame_rate "$stereo")"
+
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio pcm-mono
+assert_eq "audio channels with --audio pcm-mono" "1" "$(probe a:0 stream=channels "$stereo")"
+
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio none
+if [[ -z "$(probe a:0 stream=codec_name "$stereo")" ]]; then
+  pass "--audio none produced a file with no audio stream"
+else
+  fail "--audio none left an audio stream behind"
+fi
+
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio mp3-stereo
+assert_eq "audio codec with --audio mp3-stereo" "mp3" "$(probe a:0 stream=codec_name "$stereo")"
+
+printf '\n=== US-009: h264 profile writes a real MP4 ===\n'
+if run_convert --profile h264 --size 160x128 --fps 14 --audio aac; then
+  mp4="$WORK/out/it's a test clip.mp4"
+  if [[ -s "$mp4" ]]; then pass "h264 profile produced a .mp4"; else fail "h264 profile produced no .mp4"; fi
+  assert_eq "mp4 video codec" "h264" "$(probe v:0 stream=codec_name "$mp4")"
+  assert_eq "mp4 audio codec" "aac"  "$(probe a:0 stream=codec_name "$mp4")"
+  assert_eq "mp4 width"  "160" "$(probe v:0 stream=width  "$mp4")"
+  assert_eq "mp4 height" "128" "$(probe v:0 stream=height "$mp4")"
+  assert_eq "h264 baseline profile" "Constrained Baseline" "$(probe v:0 stream=profile "$mp4")"
+else
+  fail "h264 profile conversion failed"; sed -n '1,40p' "$WORK/log" >&2
+fi
+
+printf '\n=== US-009: amv refuses an --audio override rather than silently ignoring it ===\n'
+if "$CONVERT" -i "$WORK/in" -o "$WORK/out" --profile amv --audio mp3-stereo --dry-run >"$WORK/logaud" 2>&1; then
+  fail "amv accepted --audio, which the muxer cannot honour"
+else
+  pass "amv rejected --audio with an explanation"
+fi
+
+printf '\n=== US-009: a clean run prints nothing on stderr ===\n'
+# Regression: the EXIT trap referenced a local that was out of scope by the time
+# it fired, so every successful batch ended with "status_dir: unbound variable".
+rm -f "$WORK/out"/*.avi
+"$CONVERT" -i "$WORK/in" -o "$WORK/out" --force --profile mjpeg --fps 15 >/dev/null 2>"$WORK/errout"
+if [[ -s "$WORK/errout" ]]; then
+  fail "a successful run wrote to stderr: $(head -1 "$WORK/errout")"
+else
+  pass "a successful run wrote nothing to stderr"
+fi
 
 printf '\n=== US-004: --jobs 2 converts every file ===\n'
 cp "$SRC" "$WORK/in/second clip.mp4"
