@@ -30,6 +30,17 @@ As Bob, output frames fill the 128x160 screen with no black bars, cropping the s
 - [x] Verified at pixel level: `--rotate 90` genuinely turns the picture clockwise,
       not merely reshapes the frame
 
+## Working configuration (confirmed on the device)
+
+```
+./convert.sh --profile mjpeg --size 128x160 --rotate 90 \
+             --audio pcm-stereo --quality 2 --fps 16
+```
+
+Watched with the player held sideways.
+
+---
+
 ## US-003 — Find a codec the player actually accepts
 
 As Bob, I can test which format my player plays before committing 53 files to it.
@@ -140,7 +151,34 @@ attempt in three ways: stereo rather than mono audio, 16 fps, and `-q:v 2`.
       (codec, size, pixel format, frame rate, audio codec, rate, channels)
 - [x] `probe-pack.sh --pack recipes` builds a 9-clip set isolating one variable
       each: stereo vs mono, audio vs none, PCM vs MP3, AVI vs MP4, frame rate
-- [ ] **A clip from the recipes pack plays on the device**
+- [x] **CONFIRMED ON THE DEVICE.** Clips 1 and 9 play. The working format is:
+
+      MJPEG video, 128x160, `-q:v 2`, with **PCM stereo 22050 Hz** audio.
+
+      The failures pin down each requirement rather than leaving it assumed:
+      - #3 mono, #4 no audio, #5 MP3 all failed -> stereo PCM is required
+      - #8 Xvid and #6/#7 H.264/MP4 failed -> MJPEG only
+      - #2 at 160x128 failed -> exactly 128x160, as the manual states
+      - #1 at 16fps and #9 at 25fps both worked -> frame rate is flexible
+
+## US-010 — Keep the output within the card
+
+The confirmed settings produce 6.06 GB across the 53 files (9 hours of content),
+of which 2.66 GB is PCM audio that cannot be compressed while staying in the
+format the player accepts.
+
+- [x] `--audio-rate N` overrides the sample rate; halving it halves the PCM track
+- [x] Verified the flag actually shrinks the file, not just changes the metadata
+- [x] Measured, not estimated, on a real 60s sample from the collection:
+      - `-q:v 2`, 22050 Hz -> 6.06 GB  (the proven configuration)
+      - `-q:v 6`, 22050 Hz -> 4.34 GB
+      - `-q:v 2`, 11025 Hz -> 4.73 GB
+      - `-q:v 6`, 11025 Hz -> 3.01 GB
+- [ ] **A reduced-size variant confirmed playing on the device**
+
+  `-q:v` only changes JPEG quantisation, so it is very unlikely to affect
+  acceptance. Changing the sample rate is a real change to a working
+  configuration and should be tested before a whole batch depends on it.
 
 ---
 
@@ -151,4 +189,4 @@ attempt in three ways: stereo rather than mono audio, 16 fps, and `-q:v 2`.
 - [x] `./scripts/smoke.sh --verify-fails` proves the assertions go red against wrong output
 - [x] `./scripts/smoke.sh --target <dir>` validates AVIs already in a folder, including
       an SD card mount, and checks they all agree on geometry and codec
-- [x] 123 assertions passing, 0 failing, as of the last run
+- [x] 128 assertions passing, 0 failing, as of the last run

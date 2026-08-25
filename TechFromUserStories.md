@@ -204,6 +204,27 @@ returned, so the variable was out of scope and every successful run ended with
 `status_dir: unbound variable` on stderr under `set -u`. Now stored in a global
 `STATUS_DIR`. A test asserts a clean run writes nothing to stderr at all.
 
+## US-010 — Keep the output within the card
+
+`--audio-rate` rewrites the `-ar` value inside whatever `PROFILE_AARGS` ended up
+being, rather than adding another audio mode per rate. The loop walks the array
+and substitutes the argument after `-ar`, so it composes with every `--audio`
+mode and with the profile defaults.
+
+Sizes were measured by encoding a real 60s sample from the collection at each
+setting and extrapolating against the measured total duration of all 53 files
+(32408 s, 9.00 hours), not estimated from bitrate tables.
+
+The dominant term is the audio: PCM stereo at 22050 Hz is 86 KB/s regardless of
+picture settings, which is 2.66 GB across the collection. Video at `-q:v 2` and
+16 fps adds about 110 KB/s. That is why dropping the sample rate saves more than
+dropping the picture quality does.
+
+A test asserts the flag actually produces a smaller file, since a rate override
+that changed only the header would still pass a metadata check.
+
+Files: `convert.sh`, `scripts/smoke.sh`
+
 ## Testing
 
 `scripts/smoke.sh` builds a synthetic 640x360 source with `lavfi` (`testsrc` plus

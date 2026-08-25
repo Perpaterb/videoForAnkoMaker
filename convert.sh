@@ -27,6 +27,7 @@ JOBS="1"
 TRIM_BARS="auto"
 EXT_OVERRIDE=""
 AUDIO="profile"
+AUDIO_RATE=""
 QUALITY=""
 FORCE=0
 DRY_RUN=0
@@ -88,6 +89,9 @@ Options:
                         mp3-mono    MP3 64k, 22050 Hz, mono
                         aac         AAC 160k
                         none        no audio track at all
+  --audio-rate N      Override the audio sample rate. Halving it halves the size
+                      of a PCM track, which dominates the output on long files.
+                      Test on the player before committing a whole batch to it.
   --quality N         Encoder -q:v value, 1 is best. Profile default otherwise.
   --fps N             Output frame rate. Default: 15
   --jobs N            Convert N files concurrently. Default: 1
@@ -127,6 +131,7 @@ while [[ $# -gt 0 ]]; do
     --trim-bars)      TRIM_BARS="${2:-}"; shift 2 ;;
     --ext)            EXT_OVERRIDE="${2:-}"; shift 2 ;;
     --audio)          AUDIO="${2:-}"; shift 2 ;;
+    --audio-rate)     AUDIO_RATE="${2:-}"; shift 2 ;;
     --quality)        QUALITY="${2:-}"; shift 2 ;;
     --jobs)           JOBS="${2:-}"; shift 2 ;;
     --clip-seconds)   CLIP_SECONDS="${2:-}"; shift 2 ;;
@@ -189,6 +194,11 @@ case "$AUDIO" in
   profile|pcm-stereo|pcm-mono|mp3-stereo|mp3-mono|aac|none) ;;
   *) die "Bad --audio '$AUDIO'. Valid: profile pcm-stereo pcm-mono mp3-stereo mp3-mono aac none" ;;
 esac
+
+if [[ -n "$AUDIO_RATE" ]]; then
+  [[ "$AUDIO_RATE" =~ ^[0-9]+$ && "$AUDIO_RATE" -ge 8000 ]] \
+    || die "Bad --audio-rate '$AUDIO_RATE'. Expected a sample rate in Hz, e.g. 11025"
+fi
 
 if [[ -n "$QUALITY" ]]; then
   [[ "$QUALITY" =~ ^[0-9]+$ && "$QUALITY" -ge 1 && "$QUALITY" -le 31 ]] \
@@ -361,6 +371,19 @@ set_profile_args() {
     aac)        PROFILE_AARGS=( -c:a aac -b:a 160k ) ;;
     none)       PROFILE_AARGS=( -an ) ;;
   esac
+
+  # Rewrite -ar in whatever the audio args ended up being.
+  if [[ -n "$AUDIO_RATE" && "$AUDIO" != "none" ]]; then
+    local out=() i=0
+    while (( i < ${#PROFILE_AARGS[@]} )); do
+      if [[ "${PROFILE_AARGS[$i]}" == "-ar" ]]; then
+        out+=( -ar "$AUDIO_RATE" ); i=$((i + 2))
+      else
+        out+=( "${PROFILE_AARGS[$i]}" ); i=$((i + 1))
+      fi
+    done
+    PROFILE_AARGS=( "${out[@]}" )
+  fi
 
   PROFILE_ARGS=( "${PROFILE_VARGS[@]}" "${PROFILE_AARGS[@]}" )
 }

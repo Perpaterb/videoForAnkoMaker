@@ -360,7 +360,7 @@ else
 fi
 
 printf '\n=== US-005: bad arguments are rejected ===\n'
-for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x" "--ext ..." "--ext toolongextension" "--audio surround" "--quality 99"; do
+for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x" "--ext ..." "--ext toolongextension" "--audio surround" "--quality 99" "--audio-rate 100"; do
   # shellcheck disable=SC2086
   if "$CONVERT" -i "$WORK/in" -o "$WORK/out" $bad >/dev/null 2>&1; then
     fail "'$bad' was accepted"
@@ -445,6 +445,22 @@ fi
 
 run_convert --profile mjpeg --size 128x160 --fps 16 --audio mp3-stereo
 assert_eq "audio codec with --audio mp3-stereo" "mp3" "$(probe a:0 stream=codec_name "$stereo")"
+
+printf '\n=== US-010: --audio-rate overrides the sample rate ===\n'
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio pcm-stereo --audio-rate 11025
+rated="$WORK/out/it's a test clip.avi"
+assert_eq "sample rate with --audio-rate 11025" "11025" "$(probe a:0 stream=sample_rate "$rated")"
+assert_eq "channels still stereo"                "2"     "$(probe a:0 stream=channels "$rated")"
+assert_eq "codec unchanged"            "pcm_s16le"       "$(probe a:0 stream=codec_name "$rated")"
+# The whole point is a smaller file, so prove it actually shrank.
+half="$(stat -c%s "$rated")"
+run_convert --profile mjpeg --size 128x160 --fps 16 --audio pcm-stereo
+full="$(stat -c%s "$rated")"
+if (( half < full )); then
+  pass "halving the sample rate produced a smaller file ($half < $full)"
+else
+  fail "--audio-rate 11025 did not shrink the file ($half vs $full)"
+fi
 
 printf '\n=== US-009: h264 profile writes a real MP4 ===\n'
 if run_convert --profile h264 --size 160x128 --fps 14 --audio aac; then
