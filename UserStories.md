@@ -37,13 +37,15 @@ As Bob, I can test which format my player plays before committing 53 files to it
 - [x] `./convert.sh --test-clips` produces one short clip per codec profile into `testclips/`
 - [x] Profiles: `mjpeg` (MJPEG + PCM), `xvid` (Xvid + MP3), `mpeg4` (MPEG-4 SP + MP3)
 - [x] Each clip is named for its profile so you know which one worked
-- [x] `--profile <name>` selects the profile for the full batch; default `mjpeg`
+- [x] `--profile <name>` selects the profile for the full batch; default `amv`
 - [x] Test clips cover all three orientation strategies (sideways / landscape / upright),
       so one round of testing answers codec and orientation together
-- [ ] **Confirmed on the device**: one of the profiles plays on the actual Anko player
+- [x] **Tested on the device**: all nine AVI clips were listed by the player but
+      every one reported "Video Format Not Supported". Codec-independent and
+      geometry-independent, so the AVI container itself is rejected. See US-007.
+- [ ] **A format that plays on the device has been found**
 
-  Not verifiable from this machine. Requires copying `testclips/` to the player.
-  Left unchecked deliberately until Bob reports which clip played.
+  Still open. AMV clips are built and waiting to be tried.
 
 ## US-004 — Visible progress and an honest report
 
@@ -78,6 +80,25 @@ real picture while the black bars survived onto the display.
 - [x] Verified at pixel level: a synthetic pillarboxed source runs edge-to-edge
       picture with `auto`, and still shows bar with `off`
 
+## US-007 — AMV output
+
+The device rejected all three AVI profiles across all three geometries, which
+rules out the container rather than any codec. This class of player is built
+around AMV, which is why they historically shipped with a bundled converter.
+
+- [x] `--profile amv` produces a `.amv` file: AMV video plus IMA ADPCM audio
+- [x] `amv` is the default profile, since AVI is now known not to work here
+- [x] Output extension follows the profile, so `converted/` gets `.amv` not `.avi`
+- [x] AMV's constraints are enforced up front with messages naming the real rule:
+      height a multiple of 16, and `--fps` must divide 22050 exactly
+- [x] `-block_size` is computed as 22050/fps rather than hardcoded, verified by a
+      test at a non-default frame rate
+- [x] `--test-clips --profile amv` builds only that profile, so a second round of
+      testing does not rebuild formats already ruled out
+- [ ] **Confirmed playing on the device**
+
+  Not verifiable from this machine. Waiting on the AMV clips being tried.
+
 ---
 
 ## Testing
@@ -87,4 +108,4 @@ real picture while the black bars survived onto the display.
 - [x] `./scripts/smoke.sh --verify-fails` proves the assertions go red against wrong output
 - [x] `./scripts/smoke.sh --target <dir>` validates AVIs already in a folder, including
       an SD card mount, and checks they all agree on geometry and codec
-- [x] 66 assertions passing, 0 failing, as of the last run
+- [x] 98 assertions passing, 0 failing, as of the last run

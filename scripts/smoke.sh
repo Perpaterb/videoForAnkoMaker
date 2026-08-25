@@ -70,12 +70,27 @@ check_avi() {
   fi
   pass "file exists and is non-empty"
 
-  assert_eq "container"   "avi"          "$(ffprobe -v error -show_entries format=format_name -of csv=p=0 "$file" 2>/dev/null)"
+  # AMV is a RIFF container derived from AVI, so ffprobe reports format_name
+  # "avi" for both. The signature at byte 8 is what actually distinguishes
+  # them, so check the bytes rather than trusting the format name.
+  if [[ "$file" == *.amv ]]; then
+    assert_eq "RIFF signature" "AMV " "$(dd if="$file" bs=1 skip=8 count=4 2>/dev/null)"
+  else
+    assert_eq "container" "avi" "$(ffprobe -v error -show_entries format=format_name -of csv=p=0 "$file" 2>/dev/null)"
+    assert_eq "not an AMV in disguise" "" "$(dd if="$file" bs=1 skip=8 count=4 2>/dev/null | grep -o AMV)"
+  fi
   assert_eq "width"       "$want_w"      "$(probe v:0 stream=width "$file")"
   assert_eq "height"      "$want_h"      "$(probe v:0 stream=height "$file")"
   [[ -n "$want_vcodec" ]] && assert_eq "video codec" "$want_vcodec" "$(probe v:0 stream=codec_name "$file")"
   [[ -n "$want_acodec" ]] && assert_eq "audio codec" "$want_acodec" "$(probe a:0 stream=codec_name "$file")"
-  assert_gt0 "duration (s)" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null)"
+  # AMV headers carry no duration field, so there is nothing to assert there.
+  # Count decoded video packets instead, which is the thing we actually care
+  # about: that the file contains playable frames.
+  if [[ "$file" == *.amv ]]; then
+    assert_gt0 "video packets" "$(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$file" 2>/dev/null)"
+  else
+    assert_gt0 "duration (s)" "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null)"
+  fi
 }
 
 # ------------------------------------------------------------ target mode
@@ -85,11 +100,11 @@ if [[ -n "$TARGET" ]]; then
   [[ -d "$TARGET" ]] || { printf 'Not a directory: %s\n' "$TARGET" >&2; exit 2; }
 
   shopt -s nullglob
-  files=( "$TARGET"/*.avi "$TARGET"/*.AVI )
+  files=( "$TARGET"/*.avi "$TARGET"/*.AVI "$TARGET"/*.amv "$TARGET"/*.AMV )
   shopt -u nullglob
 
   if [[ ${#files[@]} -eq 0 ]]; then
-    printf '\nNo .avi files found in %s\n' "$TARGET" >&2
+    printf '\nNo .avi or .amv files found in %s\n' "$TARGET" >&2
     exit 1
   fi
 
@@ -150,6 +165,47 @@ if [[ $VERIFY_FAILS -eq 1 ]]; then
   printf '\n\033[31mBROKEN\033[0m: the suite stayed green against deliberately wrong expectations.\n'
   exit 1
 fi
+
+printf '\n=== US-007: amv profile (the default) writes a real .amv ===\n'
+if run_convert --profile amv --size 160x128 --fps 15; then
+  pass "convert.sh --profile amv exited 0"
+else
+  fail "convert.sh --profile amv exited non-zero"; sed -n '1,40p' "$WORK/log" >&2
+fi
+check_avi "$WORK/out/it's a test clip.amv" 160 128 "amv" "adpcm_ima_amv"
+amvfile="$WORK/out/it's a test clip.amv"
+assert_eq "amv audio sample rate" "22050" "$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of csv=p=0 "$amvfile" 2>/dev/null)"
+assert_eq "amv audio channels"    "1"     "$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$amvfile" 2>/dev/null)"
+
+printf '\n=== US-007: amv at the native 128x160 screen size ===\n'
+run_convert --profile amv --size 128x160 --rotate 90 --fps 15
+check_avi "$WORK/out/it's a test clip.amv" 128 160 "amv" "adpcm_ima_amv"
+
+printf '\n=== US-007: AMV constraints are rejected up front, not by ffmpeg ===\n'
+# Height not a multiple of 16.
+if "$CONVERT" -i "$WORK/in" -o "$WORK/out" --profile amv --size 160x120 --dry-run >"$WORK/logamv1" 2>&1; then
+  fail "amv accepted a height of 120, which is not a multiple of 16"
+else
+  if grep -q "multiple of 16" "$WORK/logamv1"; then
+    pass "amv rejected height 120 with a message naming the real constraint"
+  else
+    fail "amv rejected height 120 but the message did not explain why"
+  fi
+fi
+# fps that does not divide 22050.
+if "$CONVERT" -i "$WORK/in" -o "$WORK/out" --profile amv --fps 16 --dry-run >"$WORK/logamv2" 2>&1; then
+  fail "amv accepted 16fps, which does not divide 22050"
+else
+  if grep -q "22050" "$WORK/logamv2"; then
+    pass "amv rejected 16fps with a message naming the real constraint"
+  else
+    fail "amv rejected 16fps but the message did not explain why"
+  fi
+fi
+# And a valid fps that is NOT the default must still work, so the block_size
+# really is computed rather than hardcoded to 1470.
+run_convert --profile amv --size 160x128 --fps 10
+check_avi "$WORK/out/it's a test clip.amv" 160 128 "amv" "adpcm_ima_amv"
 
 printf '\n=== US-002/US-003: default landscape geometry, mjpeg profile ===\n'
 if run_convert --profile mjpeg --size 160x128 --fps 5; then

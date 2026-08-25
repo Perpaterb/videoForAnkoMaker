@@ -17,7 +17,8 @@ OUT_DIR="$ROOT/converted"
 TEST_DIR="$ROOT/testclips"
 LOG_DIR="$ROOT/logs"
 
-PROFILE="mjpeg"
+PROFILE="amv"
+PROFILE_EXPLICIT=0
 SIZE="160x128"
 FIT="crop"
 ROTATE="0"
@@ -29,22 +30,31 @@ DRY_RUN=0
 TEST_CLIPS=0
 CLIP_SECONDS=20
 
-VALID_PROFILES="mjpeg xvid mpeg4"
+VALID_PROFILES="amv mjpeg xvid mpeg4"
 
 usage() {
   cat <<'USAGE'
 Usage: ./convert.sh [options]
 
-Converts every video in videosToConvert/ into converted/ as AVI.
+Converts every video in videosToConvert/ into converted/, as .amv or .avi
+depending on the profile.
 
 Options:
-  --test-clips        Build short test clips (one per profile, both geometries)
-                      into testclips/ instead of converting the whole batch.
-                      Copy these to the player to find out what it accepts.
-  --profile NAME      Codec profile. Default: mjpeg
-                        mjpeg   MJPEG video + PCM audio    (widest compatibility, big files)
-                        xvid    Xvid video + MP3 audio     (small files, needs a real Xvid decoder)
-                        mpeg4   MPEG-4 SP video + MP3 audio
+  --test-clips        Build short test clips into testclips/ instead of
+                      converting the whole batch: every profile crossed with
+                      every orientation. Copy them to the player to find out
+                      what it accepts. Pass --profile as well to build just
+                      that one profile.
+  --profile NAME      Codec profile. Default: amv
+                        amv     AMV video + IMA ADPCM audio, .amv container.
+                                What these players were built for. Try first.
+                        mjpeg   MJPEG video + PCM audio, .avi  (big files)
+                        xvid    Xvid video + MP3 audio, .avi   (needs a real Xvid decoder)
+                        mpeg4   MPEG-4 SP video + MP3 audio, .avi
+
+                      AMV constraints, enforced below: output height must be a
+                      multiple of 16, audio is always 22050 Hz mono, and --fps
+                      must divide 22050 exactly (5 6 7 9 10 14 15 18 21 25 30).
   --size WxH          Output frame size. Default: 160x128 (landscape, held sideways).
                       Use 128x160 for portrait.
   --fit MODE          crop    centre-crop to fill, no bars, loses the sides (default)
@@ -72,10 +82,10 @@ Examples:
 
   # Full screen held sideways. Matches the 128x160 panel exactly and does not
   # rely on the player rotating anything, so it is the safest way to fill it.
-  ./convert.sh --profile mjpeg --size 128x160 --rotate 90
+  ./convert.sh --profile amv --size 128x160 --rotate 90
 
   # Landscape file. Fills the screen only if the player auto-rotates.
-  ./convert.sh --profile mjpeg --size 160x128
+  ./convert.sh --profile amv --size 160x128
 
   ./convert.sh --profile xvid --jobs 4    # smaller files, four at a time
   ./convert.sh --size 128x160 --fit pad   # upright, whole frame, black bars
@@ -88,7 +98,7 @@ note() { printf '%s\n' "$*"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --test-clips)     TEST_CLIPS=1; shift ;;
-    --profile)        PROFILE="${2:-}"; shift 2 ;;
+    --profile)        PROFILE="${2:-}"; PROFILE_EXPLICIT=1; shift 2 ;;
     --size)           SIZE="${2:-}"; shift 2 ;;
     --fit)            FIT="${2:-}"; shift 2 ;;
     --rotate)         ROTATE="${2:-}"; shift 2 ;;
@@ -131,6 +141,20 @@ case "$FIT" in
   *) die "Bad --fit '$FIT'. Valid: crop, pad, stretch" ;;
 esac
 
+# AMV is far pickier than AVI. Check the combination up front and say exactly
+# what is wrong, rather than letting ffmpeg fail with "could not write header".
+validate_amv() {
+  local h="$1" fps="$2"
+  if (( h % 16 != 0 )); then
+    die "AMV needs a height that is a multiple of 16, but --size gives ${h}.
+       Try 128x160 (the native screen) or 160x128."
+  fi
+  if (( 22050 % fps != 0 )); then
+    die "AMV locks audio to 22050 Hz and needs --fps to divide it exactly.
+       ${fps} does not. Valid: 5 6 7 9 10 14 15 18 21 25 30 (15 is the default)."
+  fi
+}
+
 case "$TRIM_BARS" in
   auto|off) ;;
   *) die "Bad --trim-bars '$TRIM_BARS'. Valid: auto, off" ;;
@@ -143,6 +167,11 @@ esac
 
 [[ "$JOBS" =~ ^[0-9]+$ && "$JOBS" -ge 1 ]] || die "Bad --jobs '$JOBS'. Expected a positive integer"
 [[ "$FPS" =~ ^[0-9]+$ && "$FPS" -ge 1 ]]   || die "Bad --fps '$FPS'. Expected a positive integer"
+
+# --test-clips picks its own geometries, so it validates per clip instead.
+if [[ "$PROFILE" == "amv" && $TEST_CLIPS -eq 0 ]]; then
+  validate_amv "$HEIGHT" "$FPS"
+fi
 
 # ------------------------------------------------------------------ encoding
 
@@ -228,24 +257,42 @@ build_vf() {
 }
 
 # Populates the PROFILE_ARGS array with codec flags for the named profile.
+# Sets PROFILE_ARGS (codec flags), PROFILE_FORMAT (muxer) and PROFILE_EXT.
 set_profile_args() {
   case "$1" in
+    amv)
+      # What this class of player was actually built to play. Three hard
+      # constraints, all enforced by validate_amv():
+      #   - audio is 22050 Hz mono, the only rate the encoder opens at
+      #   - the muxer demands exactly sample_rate/fps samples per audio frame,
+      #     which is what -block_size sets. Get it wrong and the header will
+      #     not write at all.
+      #   - the encoder wants a height that is a multiple of 16
+      PROFILE_ARGS=( -c:v amv -pix_fmt yuvj420p -q:v 6
+                     -c:a adpcm_ima_amv -ar 22050 -ac 1
+                     -block_size $((22050 / FPS)) )
+      PROFILE_FORMAT="amv"
+      PROFILE_EXT="amv"
+      ;;
     mjpeg)
       # MJPEG plus uncompressed PCM. Every frame is a standalone JPEG, which is
       # what the cheapest decoder chips cope with. Mono 22kHz keeps the
       # uncompressed audio from dwarfing the video.
       PROFILE_ARGS=( -c:v mjpeg -q:v 6 -pix_fmt yuvj420p
                      -c:a pcm_s16le -ar 22050 -ac 1 )
+      PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
     xvid)
       PROFILE_ARGS=( -c:v libxvid -q:v 6 -pix_fmt yuv420p -vtag XVID
                      -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
+      PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
     mpeg4)
       # ffmpeg's built-in MPEG-4 encoder, tagged DIVX because some players
       # dispatch on the FourCC rather than sniffing the stream.
       PROFILE_ARGS=( -c:v mpeg4 -q:v 6 -pix_fmt yuv420p -vtag DIVX
                      -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 )
+      PROFILE_FORMAT="avi"; PROFILE_EXT="avi"
       ;;
   esac
 }
@@ -261,7 +308,7 @@ convert_one() {
               -map 0:v:0 -map '0:a:0?'
               -vf "$vf" -r "$FPS"
               "${PROFILE_ARGS[@]}"
-              -f avi "$dst" )
+              -f "$PROFILE_FORMAT" "$dst" )
   if [[ $DRY_RUN -eq 1 ]]; then
     printf '%q ' "${cmd[@]}"; printf '\n'
     return 0
@@ -323,13 +370,27 @@ run_test_clips() {
     "upright   128  160   0"
   )
 
+  # Build every profile by default. If --profile was named explicitly, build
+  # only that one, so a second round of testing does not rebuild formats the
+  # player has already rejected.
+  local profiles="$VALID_PROFILES"
+  if [[ $PROFILE_EXPLICIT -eq 1 ]]; then
+    profiles="$PROFILE"
+    note "Only building the '$PROFILE' profile (--profile was given)."
+    note ""
+  fi
+
   local made=0 failed=0
   local prof v name w h rot out
-  for prof in $VALID_PROFILES; do
+  for prof in $profiles; do
     set_profile_args "$prof"
     for v in "${variants[@]}"; do
       read -r name w h rot <<<"$v"
-      out="$TEST_DIR/test_${prof}_${name}.avi"
+      if [[ "$prof" == "amv" ]] && (( h % 16 != 0 || 22050 % FPS != 0 )); then
+        printf '  %-30s skipped (AMV cannot do %sx%s at %sfps)\n' "test_${prof}_${name}" "$w" "$h" "$FPS"
+        continue
+      fi
+      out="$TEST_DIR/test_${prof}_${name}.${PROFILE_EXT}"
       printf '  %-30s ' "$(basename "$out")"
       if convert_one "$src" "$out" "$w" "$h" "$FIT" "$rot" "$log" \
            -ss "$start" -t "$CLIP_SECONDS"; then
@@ -346,12 +407,17 @@ run_test_clips() {
   note ""
   note "Built $made clip(s), $failed failed."
   note ""
-  note "Copy testclips/ onto the player. Two things to find out at once:"
+  note "Copy testclips/ onto the player."
   note ""
-  note "  1. WHICH PROFILE PLAYS AT ALL   mjpeg / xvid / mpeg4"
-  note "     Some will show nothing, or audio with a black screen."
-  note ""
-  note "  2. WHICH ORIENTATION FILLS THE SCREEN"
+  if [[ $PROFILE_EXPLICIT -eq 0 ]]; then
+    note "  1. WHICH PROFILE PLAYS AT ALL   $profiles"
+    note "     A black screen with working audio means the video codec is not"
+    note "     supported. \"Format not supported\" usually means the container is."
+    note ""
+    note "  2. WHICH ORIENTATION FILLS THE SCREEN"
+  else
+    note "  WHICH ORIENTATION FILLS THE SCREEN"
+  fi
   note "     *_sideways   128x160 file, picture rotated into it."
   note "                  Turn the player SIDEWAYS. Should fill the screen."
   note "                  Best bet: matches the screen exactly, needs no"
@@ -363,8 +429,9 @@ run_test_clips() {
   note "                  but crops the most off the sides of each page."
   note ""
   note "Then run the full batch with whatever won, e.g."
-  note "  ./convert.sh --profile mjpeg --size 128x160 --rotate 90   # sideways"
-  note "  ./convert.sh --profile mjpeg --size 160x128               # landscape"
+  note "  ./convert.sh --profile $PROFILE --size 128x160 --rotate 90   # sideways"
+  note "  ./convert.sh --profile $PROFILE --size 160x128               # landscape"
+  note "  ./convert.sh --profile $PROFILE --size 128x160               # upright"
 
   [[ $failed -eq 0 ]]
 }
@@ -388,7 +455,7 @@ run_batch() {
 
   set_profile_args "$PROFILE"
 
-  note "Profile:  $PROFILE"
+  note "Profile:  $PROFILE  (.${PROFILE_EXT})"
   note "Size:     ${WIDTH}x${HEIGHT}  (fit: $FIT, rotate: ${ROTATE}deg, ${FPS}fps)"
   note "Input:    $IN_DIR  (${#files[@]} file(s))"
   note "Output:   $OUT_DIR"
@@ -403,7 +470,7 @@ run_batch() {
     idx=$((idx + 1))
     local base out
     base="$(basename "$f")"
-    out="$OUT_DIR/${base%.*}.avi"
+    out="$OUT_DIR/${base%.*}.${PROFILE_EXT}"
 
     # Guard against -o pointing at the input folder: without this the batch
     # picks up its own .avi output on a later pass and asks ffmpeg to read and
@@ -468,7 +535,7 @@ run_batch() {
 
   local out_bytes=0
   if [[ $DRY_RUN -eq 0 && -d "$OUT_DIR" ]]; then
-    out_bytes="$(find "$OUT_DIR" -maxdepth 1 -type f -name '*.avi' -printf '%s\n' 2>/dev/null | awk '{t+=$1} END{print t+0}')"
+    out_bytes="$(find "$OUT_DIR" -maxdepth 1 -type f \( -name '*.avi' -o -name '*.amv' \) -printf '%s\n' 2>/dev/null | awk '{t+=$1} END{print t+0}')"
   fi
 
   note ""

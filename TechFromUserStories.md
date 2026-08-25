@@ -114,6 +114,33 @@ Cost is three short decode passes per file, a few seconds each.
 
 Files: `convert.sh`
 
+## US-007 — AMV output
+
+`set_profile_args()` gained an `amv` case and now sets three things rather than
+one: `PROFILE_ARGS`, `PROFILE_FORMAT` (the muxer) and `PROFILE_EXT`. Output
+filenames in `run_batch()` use `PROFILE_EXT`, and `convert_one()` passes
+`-f "$PROFILE_FORMAT"`, so a profile is free to change container.
+
+Getting AMV to encode at all took three findings, none of them documented in
+ffmpeg's help output:
+
+1. `adpcm_ima_amv` only opens at **22050 Hz**. 16000, 24000 and 8000 all fail at
+   encoder-open.
+2. The AMV muxer demands exactly `sample_rate / fps` samples per audio frame.
+   The encoder defaults to 1024, so the header refuses to write with
+   "Invalid audio frame size. Got 1024, wanted 1378". The fix is the encoder's
+   `-block_size`, computed as `22050 / FPS`.
+3. Consequently **fps must divide 22050 exactly**: 5 6 7 9 10 14 15 18 21 25 30.
+   15 is the default and needs no change.
+4. The encoder rejects a **height that is not a multiple of 16**. 128x160 and
+   160x128 are both fine; 160x120 is not.
+
+`validate_amv()` checks 1, 3 and 4 before any work starts and names the actual
+rule in the error, because ffmpeg's own failure ("Could not write header
+(incorrect codec parameters ?)") says nothing useful.
+
+Files: `convert.sh`
+
 ## Testing
 
 `scripts/smoke.sh` builds a synthetic 640x360 source with `lavfi` (`testsrc` plus
@@ -146,8 +173,23 @@ used to pick up its own `.avi` output as a source on the next run and hand ffmpe
 the same path to read and write. `run_batch()` now compares `readlink -f` of both
 paths and skips.
 
-`--target <dir>` points the same assertions at an existing folder of AVIs,
-including an SD card mount. It takes the geometry and codec of the first file as
+AMV needed two assertions rewritten rather than reused, because the format
+genuinely differs from AVI:
+
+- **Container.** AMV is a RIFF container derived from AVI, so `ffprobe` reports
+  `format_name=avi` for both. The distinguishing feature is the `AMV ` signature
+  at byte 8, so the test reads the bytes with `dd`. The `.avi` branch asserts the
+  inverse, that the signature is absent, so the two cannot silently swap.
+- **Duration.** AMV headers carry no duration field; `ffprobe` returns `N/A` by
+  design. Asserting `duration > 0` would have been asserting something false
+  about the format, so the AMV branch counts decoded video packets with
+  `-count_packets` instead, which is the property actually worth checking.
+
+A further test encodes AMV at 10 fps, not just the default 15, so a `-block_size`
+accidentally hardcoded to 1470 would fail.
+
+`--target <dir>` points the same assertions at an existing folder of `.avi` or
+`.amv` files, including an SD card mount. It takes the geometry and codec of the first file as
 the reference and requires every other file to match, since a player that accepts
 one size may reject another.
 
