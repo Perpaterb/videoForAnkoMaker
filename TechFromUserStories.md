@@ -1,0 +1,154 @@
+# Technical log
+
+One entry per story ID: what was actually built, and the files touched.
+
+---
+
+## US-001 — Batch convert a folder of videos
+
+`run_batch()` in `convert.sh`. Collects input with
+`find -maxdepth 1 -type f -print0 | sort -z` into a bash array, so filenames with
+spaces and apostrophes survive intact (the real input set contains
+`everyone's got a bottom.mp4`). Output name is the input basename with the
+extension replaced by `.avi`.
+
+Per-file results are written as single-word status files into a `mktemp -d`
+directory rather than shell variables, because with `--jobs > 1` the conversions
+run in subshells and variable increments would be lost. The tallies are read back
+after `wait`.
+
+Skip logic keys on `-s "$out"` (exists and non-empty), so a truncated output from
+an interrupted run is retried rather than mistaken for a finished file.
+
+Files: `convert.sh`
+
+## US-002 — Correct geometry for the Anko screen
+
+`build_vf()` in `convert.sh` builds the ffmpeg filter chain.
+
+Rotation is emitted first (`transpose`), so `--fit` operates on the final
+orientation rather than the source one. Then:
+
+- `crop`: `scale=W:H:force_original_aspect_ratio=increase,crop=W:H` — scales until
+  both axes cover the target, then centre-crops the overflow. This is what loses
+  the left and right of a 16:9 source.
+- `pad`: `force_original_aspect_ratio=decrease` plus a centred `pad`.
+- `stretch`: a bare `scale=W:H`.
+
+Every chain ends `,setsar=1`. Without it the AVI carries a non-square sample
+aspect ratio and players that honour it draw the frame at the wrong shape.
+
+Default size is `160x128`, landscape. `--size` is parsed with a `^([0-9]+)x([0-9]+)$`
+regex, so a malformed value is caught before ffmpeg is invoked.
+
+Files: `convert.sh`
+
+## US-003 — Find a codec the player actually accepts
+
+`set_profile_args()` and `run_test_clips()` in `convert.sh`.
+
+Three profiles:
+
+- `mjpeg` — `-c:v mjpeg -q:v 6 -pix_fmt yuvj420p` with `-c:a pcm_s16le -ar 22050 -ac 1`.
+  Every frame is a standalone JPEG, which is what the cheapest decoder chips cope
+  with. Audio is mono 22 kHz specifically because uncompressed stereo 44.1 kHz PCM
+  is ~10 MB/min and would dwarf the video on a long read-aloud.
+- `xvid` — `-c:v libxvid -vtag XVID` with `-c:a libmp3lame -b:a 64k`.
+- `mpeg4` — ffmpeg's built-in `mpeg4` encoder, `-vtag DIVX`. The explicit FourCC
+  tags matter: some players dispatch on the tag rather than sniffing the stream.
+
+`--test-clips` renders 3 profiles x 2 geometries = 6 clips from the first input
+file that `ffprobe` confirms has a video stream. It seeks 15 s in when the source
+is long enough, so the clip is real content rather than a title card.
+
+The device-confirmation criterion is intentionally left unchecked in
+`UserStories.md`. Nothing on this machine can prove which format the player
+accepts.
+
+Files: `convert.sh`
+
+## US-004 — Visible progress and an honest report
+
+Progress lines are `printf` with a `%-52.52s` field so long book titles are
+truncated to a fixed column and the results stay aligned. ffmpeg's own output is
+appended to `logs/convert-<timestamp>.log`, never the terminal.
+
+`--jobs N` gates on `while [[ $(jobs -rp | wc -l) -ge $JOBS ]]; do wait -n; done`.
+
+`human_size()` formats byte counts via `awk`.
+
+Files: `convert.sh`
+
+## US-005 — Fails clearly instead of mysteriously
+
+`require_tools()` checks `ffmpeg` and `ffprobe` up front and prints the apt
+command. All flag validation happens before any work starts. `has_video_stream()`
+uses `ffprobe -select_streams v:0` so a stray `.txt` or cover image in the input
+folder is skipped rather than counted as a failure.
+
+Files: `convert.sh`
+
+## US-006 — Remove black bars already baked into the source
+
+`detect_bars()` in `convert.sh`, wired in by `convert_one()` which prepends the
+result to the filter chain ahead of rotation and fitting.
+
+Found by extracting a frame from `3 little pigs 1.mp4` and looking at it: the
+"16:9" sources are mostly a squarish page image on a black background.
+`cropdetect` across the folder confirmed 45 of 53 files carry ~160px bars each
+side (1280x720 with content at 962x720+156).
+
+Detection runs `cropdetect=24:2:0` over 90 frames at 20%, 50% and 80% of
+duration, and takes the **union** of the proposed rectangles rather than trusting
+one. A dark scene makes `cropdetect` propose a window tighter than the real
+picture; unioning means the failure mode is leaving a sliver of bar on rather
+than slicing into the page. Sampling across the folder showed the detected
+rectangle is stable to within 2px per file, so the union costs nothing in
+practice while removing the tail risk.
+
+Two guards: any sample that would discard more than 70% of an axis is ignored,
+and the final rectangle is rounded outward to even offsets and dimensions
+because yuv420p cannot represent odd chroma geometry.
+
+Cost is three short decode passes per file, a few seconds each.
+
+Files: `convert.sh`
+
+## Testing
+
+`scripts/smoke.sh` builds a synthetic 640x360 source with `lavfi` (`testsrc` plus
+`sine`), named `it's a test clip.mp4` to exercise the quoting path, and then
+invokes `./convert.sh` as a subprocess. It does not source the script or call its
+functions: production's door is the CLI, so the tests use the CLI. Assertions read
+back real values with `ffprobe` (`format_name`, `stream=width/height/codec_name`,
+`format=duration`).
+
+`--verify-fails` runs a correct conversion and then asserts deliberately wrong
+dimensions (999x999). It exits 0 only when the assertions actually failed, which
+is what makes the rest of the suite meaningful.
+
+Two assertions check pixels rather than metadata, because a frame-size check
+cannot distinguish a real transpose from a resize:
+
+- Rotation: a source that is red on the left and blue on the right must come out
+  red on top after `--rotate 90`. This catches a rotation that is missing, or
+  applied anticlockwise.
+- Bar trimming: a 360x360 red/blue image centred on a 640x360 black background
+  must come out red at the left edge with `--trim-bars auto`, and must *not* with
+  `--trim-bars off`. The negative half is what stops the flag silently becoming a
+  no-op.
+
+Both read back average colours with `ffmpeg -f rawvideo -pix_fmt rgb24` piped
+through `od`.
+
+A regression test covers `-i` and `-o` pointing at the same folder: the batch
+used to pick up its own `.avi` output as a source on the next run and hand ffmpeg
+the same path to read and write. `run_batch()` now compares `readlink -f` of both
+paths and skips.
+
+`--target <dir>` points the same assertions at an existing folder of AVIs,
+including an SD card mount. It takes the geometry and codec of the first file as
+the reference and requires every other file to match, since a player that accepts
+one size may reject another.
+
+Files: `scripts/smoke.sh`

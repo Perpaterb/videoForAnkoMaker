@@ -1,0 +1,23 @@
+# Source videos and everything derived from them. These are large and are not
+# mine to publish.
+videosToConvert/
+converted/
+testclips/
+releases/
+
+# ffmpeg output from each run
+logs/
+
+# Editor and tooling
+.claude/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Stray media at the repo root
+*.avi
+*.mp4
+*.mkv
+*.mov
+*.webm
