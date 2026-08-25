@@ -25,6 +25,7 @@ ROTATE="0"
 FPS="15"
 JOBS="1"
 TRIM_BARS="auto"
+EXT_OVERRIDE=""
 FORCE=0
 DRY_RUN=0
 TEST_CLIPS=0
@@ -68,6 +69,11 @@ Options:
                             remove them before fitting, so the crop eats black
                             rather than picture (default)
                       off   fit the source frame exactly as it is
+  --ext EXT           Force the output file extension, without changing what is
+                      actually encoded. Some players filter their file browser
+                      by extension: this Anko unit lists .avi and does not show
+                      .amv at all, so "--profile amv --ext avi" writes AMV data
+                      into a file the browser will display.
   --fps N             Output frame rate. Default: 15
   --jobs N            Convert N files concurrently. Default: 1
   --clip-seconds N    Length of each test clip. Default: 20
@@ -104,6 +110,7 @@ while [[ $# -gt 0 ]]; do
     --rotate)         ROTATE="${2:-}"; shift 2 ;;
     --fps)            FPS="${2:-}"; shift 2 ;;
     --trim-bars)      TRIM_BARS="${2:-}"; shift 2 ;;
+    --ext)            EXT_OVERRIDE="${2:-}"; shift 2 ;;
     --jobs)           JOBS="${2:-}"; shift 2 ;;
     --clip-seconds)   CLIP_SECONDS="${2:-}"; shift 2 ;;
     --force)          FORCE=1; shift ;;
@@ -154,6 +161,12 @@ validate_amv() {
        ${fps} does not. Valid: 5 6 7 9 10 14 15 18 21 25 30 (15 is the default)."
   fi
 }
+
+if [[ -n "$EXT_OVERRIDE" ]]; then
+  EXT_OVERRIDE="${EXT_OVERRIDE#.}"
+  [[ "$EXT_OVERRIDE" =~ ^[A-Za-z0-9]{1,8}$ ]] \
+    || die "Bad --ext '$EXT_OVERRIDE'. Expected a short alphanumeric extension, e.g. avi"
+fi
 
 case "$TRIM_BARS" in
   auto|off) ;;
@@ -258,6 +271,13 @@ build_vf() {
 
 # Populates the PROFILE_ARGS array with codec flags for the named profile.
 # Sets PROFILE_ARGS (codec flags), PROFILE_FORMAT (muxer) and PROFILE_EXT.
+# Wraps set_profile_args so --ext applies everywhere the extension is used.
+set_profile() {
+  set_profile_args "$1"
+  [[ -n "$EXT_OVERRIDE" ]] && PROFILE_EXT="$EXT_OVERRIDE"
+  return 0
+}
+
 set_profile_args() {
   case "$1" in
     amv)
@@ -383,7 +403,7 @@ run_test_clips() {
   local made=0 failed=0
   local prof v name w h rot out
   for prof in $profiles; do
-    set_profile_args "$prof"
+    set_profile "$prof"
     for v in "${variants[@]}"; do
       read -r name w h rot <<<"$v"
       if [[ "$prof" == "amv" ]] && (( h % 16 != 0 || 22050 % FPS != 0 )); then
@@ -453,9 +473,13 @@ run_batch() {
 
   [[ ${#files[@]} -gt 0 ]] || die "No files found in $IN_DIR"
 
-  set_profile_args "$PROFILE"
+  set_profile "$PROFILE"
 
-  note "Profile:  $PROFILE  (.${PROFILE_EXT})"
+  if [[ -n "$EXT_OVERRIDE" ]]; then
+    note "Profile:  $PROFILE  (${PROFILE_FORMAT} data written as .${PROFILE_EXT})"
+  else
+    note "Profile:  $PROFILE  (.${PROFILE_EXT})"
+  fi
   note "Size:     ${WIDTH}x${HEIGHT}  (fit: $FIT, rotate: ${ROTATE}deg, ${FPS}fps)"
   note "Input:    $IN_DIR  (${#files[@]} file(s))"
   note "Output:   $OUT_DIR"

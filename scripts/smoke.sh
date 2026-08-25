@@ -207,6 +207,34 @@ fi
 run_convert --profile amv --size 160x128 --fps 10
 check_avi "$WORK/out/it's a test clip.amv" 160 128 "amv" "adpcm_ima_amv"
 
+printf '\n=== US-008: --ext writes the chosen data under a different extension ===\n'
+# The player filters its file browser by extension: it lists .avi and does not
+# show .amv at all. So AMV data has to be able to travel under a .avi name.
+# Clear the output dir first: earlier sections left files here, and the check
+# below is specifically that no stray .amv appears.
+rm -f "$WORK/out"/*.avi "$WORK/out"/*.amv
+if run_convert --profile amv --ext avi --size 160x128 --fps 15; then
+  disguised="$WORK/out/it's a test clip.avi"
+  if [[ -s "$disguised" ]]; then
+    pass "amv --ext avi produced a .avi file"
+  else
+    fail "amv --ext avi produced no .avi file"
+  fi
+  # The bytes must still be AMV, not silently re-muxed to real AVI.
+  assert_eq "signature inside the .avi file" "AMV " "$(dd if="$disguised" bs=1 skip=8 count=4 2>/dev/null)"
+  assert_eq "video codec inside the .avi file" "amv" "$(probe v:0 stream=codec_name "$disguised")"
+  assert_eq "width"  "160" "$(probe v:0 stream=width  "$disguised")"
+  assert_eq "height" "128" "$(probe v:0 stream=height "$disguised")"
+  if [[ ! -e "$WORK/out/it's a test clip.amv" ]]; then
+    pass "no stray .amv left alongside"
+  else
+    fail "an .amv was written as well as the .avi"
+  fi
+else
+  fail "amv --ext avi conversion failed"; sed -n '1,40p' "$WORK/log" >&2
+fi
+rm -f "$WORK/out"/*.avi "$WORK/out"/*.amv
+
 printf '\n=== US-002/US-003: default landscape geometry, mjpeg profile ===\n'
 if run_convert --profile mjpeg --size 160x128 --fps 5; then
   pass "convert.sh exited 0"
@@ -332,7 +360,7 @@ else
 fi
 
 printf '\n=== US-005: bad arguments are rejected ===\n'
-for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x"; do
+for bad in "--profile nope" "--size 160-128" "--fit sideways" "--rotate 45" "--trim-bars maybe" "--jobs 0" "--fps x" "--ext ..." "--ext toolongextension"; do
   # shellcheck disable=SC2086
   if "$CONVERT" -i "$WORK/in" -o "$WORK/out" $bad >/dev/null 2>&1; then
     fail "'$bad' was accepted"

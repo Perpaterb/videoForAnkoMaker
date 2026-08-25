@@ -125,6 +125,23 @@ The ones worth knowing: `--profile`, `--size`, `--rotate`, `--fit`
 `--fit pad` is the escape hatch if cropping loses words on a page that runs text
 edge to edge: it letterboxes instead, keeping the whole frame at a smaller size.
 
+## When nothing plays
+
+```
+./scripts/probe-pack.sh
+```
+
+Builds nine labelled clips into `testclips/` that vary one property at a time:
+container, file extension, and resolution. Copy them all to the player; whichever
+one plays identifies the variable that mattered.
+
+The two things worth reading carefully on the device:
+
+- **Is the file listed at all?** If it is not, the browser filtered it out by
+  extension and the contents were never examined. This unit lists `.avi` and does
+  not show `.amv`, which is what `--ext` exists for.
+- **Listed but "Format Not Supported"?** The contents were examined and rejected.
+
 ## Tests
 
 ```

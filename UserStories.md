@@ -95,9 +95,27 @@ around AMV, which is why they historically shipped with a bundled converter.
       test at a non-default frame rate
 - [x] `--test-clips --profile amv` builds only that profile, so a second round of
       testing does not rebuild formats already ruled out
+- [x] **Tested on the device**: the player reported "no videos detected". It did
+      not list the `.amv` files at all, where it *had* listed the `.avi` files.
+      The file browser filters by extension. See US-008.
 - [ ] **Confirmed playing on the device**
 
-  Not verifiable from this machine. Waiting on the AMV clips being tried.
+## US-008 — Extension override and a diagnostic probe pack
+
+The player lists `.avi` and does not show `.amv`, so its browser filters by
+extension. What is inside the file and what the file is called have to be
+separable.
+
+- [x] `--ext EXT` forces the output extension without changing the encoding
+- [x] `--profile amv --ext avi` writes real AMV data (verified by the `AMV `
+      signature at byte 8) into a file named `.avi`
+- [x] No stray file under the profile's own extension is left behind
+- [x] Bad `--ext` values are rejected
+- [x] `scripts/probe-pack.sh` builds a labelled 9-clip diagnostic set that varies
+      one thing at a time: container, extension and resolution
+- [x] Clip names are short and digit-prefixed so they stay readable and ordered
+      on a 128x160 screen
+- [ ] **A clip from the pack plays on the device**
 
 ---
 
@@ -108,4 +126,4 @@ around AMV, which is why they historically shipped with a bundled converter.
 - [x] `./scripts/smoke.sh --verify-fails` proves the assertions go red against wrong output
 - [x] `./scripts/smoke.sh --target <dir>` validates AVIs already in a folder, including
       an SD card mount, and checks they all agree on geometry and codec
-- [x] 98 assertions passing, 0 failing, as of the last run
+- [x] 106 assertions passing, 0 failing, as of the last run

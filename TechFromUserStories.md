@@ -141,6 +141,33 @@ rule in the error, because ffmpeg's own failure ("Could not write header
 
 Files: `convert.sh`
 
+## US-008 — Extension override and a diagnostic probe pack
+
+`--ext` is applied by `set_profile()`, a thin wrapper around
+`set_profile_args()` that overrides `PROFILE_EXT` after the profile has set its
+own default. Everything downstream already used `PROFILE_EXT`, so nothing else
+needed to change, and `PROFILE_FORMAT` is untouched: the muxer still writes AMV,
+only the filename differs.
+
+The device evidence that motivated this: nine AVI clips were listed and rejected
+with "Video Format Not Supported", then three AMV clips produced "no videos
+detected". Listing is the discriminator. The browser filters on extension, so
+the `.amv` files were never examined at all and their rejection says nothing
+about whether AMV would play.
+
+`scripts/probe-pack.sh` builds nine clips that vary one property at a time
+across two live hypotheses: that AMV is correct but was misnamed (variants 1-4),
+and that AVI was correct all along but the resolution was wrong (variants 6-9).
+Variant 5 is the control, AMV under its own extension, which should stay
+invisible if the extension theory holds.
+
+It decodes the source once into a short excerpt and re-encodes that for each
+variant, rather than seeking into the full file nine times. Labels are
+digit-prefixed and under 16 characters so they sort predictably and stay
+readable truncated on a 128x160 screen.
+
+Files: `scripts/probe-pack.sh`, `convert.sh`
+
 ## Testing
 
 `scripts/smoke.sh` builds a synthetic 640x360 source with `lavfi` (`testsrc` plus
