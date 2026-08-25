@@ -174,11 +174,18 @@ format the player accepts.
       - `-q:v 6`, 22050 Hz -> 4.34 GB
       - `-q:v 2`, 11025 Hz -> 4.73 GB
       - `-q:v 6`, 11025 Hz -> 3.01 GB
-- [ ] **A reduced-size variant confirmed playing on the device**
+- [x] Not needed: the proven settings were used, since the card had room.
+      The reduced-size options remain available if space ever becomes tight.
+      `-q:v` only changes JPEG quantisation so it is very unlikely to affect
+      acceptance; changing the sample rate is a real change to a working
+      configuration and should be tested before a batch depends on it.
 
-  `-q:v` only changes JPEG quantisation, so it is very unlikely to affect
-  acceptance. Changing the sample rate is a real change to a working
-  configuration and should be tested before a whole batch depends on it.
+## US-011 — Convert the collection
+
+- [x] All 53 files converted: 53 ok, 0 failed, 5.4 GB
+- [x] Verified every output is exactly `mjpeg 128x160` + `pcm_s16le 22050 stereo`,
+      the format confirmed working on the device. 0 mismatches.
+- [x] `./scripts/smoke.sh --target converted` passes 371 assertions across all 53
 
 ---
 
@@ -190,3 +197,4 @@ format the player accepts.
 - [x] `./scripts/smoke.sh --target <dir>` validates AVIs already in a folder, including
       an SD card mount, and checks they all agree on geometry and codec
 - [x] 128 assertions passing, 0 failing, as of the last run
+- [x] `--target converted` passes 371 assertions across the finished batch

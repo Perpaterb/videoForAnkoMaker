@@ -278,3 +278,24 @@ the reference and requires every other file to match, since a player that accept
 one size may reject another.
 
 Files: `scripts/smoke.sh`
+
+## US-011 — Convert the collection
+
+Run:
+
+```
+./convert.sh --profile mjpeg --size 128x160 --rotate 90 \
+             --audio pcm-stereo --quality 2 --fps 16 --jobs 8
+```
+
+53 converted, 0 failed, 5.4 GB, about 20 minutes on 20 cores at `--jobs 8`.
+The measured estimate before the run was 6.06 GB; the batch came in under it
+because bar trimming removes the pillarboxed black from 45 of the 53 sources
+before encoding, and flat black costs more MJPEG bits than the estimate's
+single-sample extrapolation assumed.
+
+Verified after the fact rather than trusting the exit code: every one of the 53
+outputs was probed and matched `mjpeg,128,160` and `pcm_s16le,22050,2` exactly,
+with 0 mismatches, and `smoke.sh --target converted` passed 371 assertions.
+
+Files: none changed; this is a record of the run.
